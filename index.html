@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <style>
+        #outlog {
+            margin-top: 10px;
+            padding: 5px;
+            border: 1px solid #000;
+        }
+    </style>
+</head>
+<body>
+    <label for="size">Matrix size: </label><input id="size" value="512" type="number" min="2" max="4096">
+    <button id="calc">recalculate</button>
+    <div id="outlog"></div>
+    <script type="module">
+        import loadWasmMmul from './mmul.mjs';
+        const module = await loadWasmMmul();
+        log('WASM module is loaded');
+        window.module = module;
+
+        function log(text) {
+            const logEl = document.getElementById('outlog');
+            logEl.innerText = logEl.innerText + text + '\n';
+        }
+
+        function simpleMul(out, a, b, n) {
+            for (let i = 0; i < n; i++) {
+                for (let j = 0; j < n; j++) {
+                    out[i * n + j] = 0;
+                    for (let k = 0; k < n; k++) {
+                        out[i * n + j] += a[i * n + k] * b[j * n + k];
+                    }
+                }
+            }
+        }
+
+        function doMultiplicationJs(size) {
+            const a = new Int32Array(size * size);
+            a.fill(1);
+            const b = a.slice();
+            const out = new Int32Array(size * size);
+            const ts = performance.now();
+            simpleMul(out, a, b, size);
+            const mulTime = performance.now() - ts;
+            log(`JS for ${size}x${size} is ${mulTime} ms`);
+            if (out.some(v => v !== size)) {
+                log('!!! JS calculated incorrectly, please check "window.outMulJs"');
+            }
+
+            return outMul;
+        }
+
+        function doMultiplication(size, simd) {
+            const arraySize = size * size;
+            const outP = module._alloc_buf(size);
+            const out = new Int32Array(module.HEAPU8.buffer, outP, arraySize);
+            const inA = module._alloc_buf(size);
+            const a = new Int32Array(module.HEAPU8.buffer, inA, arraySize);
+            const inB = module._alloc_buf(size);
+            const b = new Int32Array(module.HEAPU8.buffer, inB, arraySize);
+
+            a.fill(1);
+            b.fill(1);
+
+            const ts = performance.now();
+            if (simd) {
+                module._mmul_simd(outP, inA, inB, size);
+            } else {
+                module._mmul(outP, inA, inB, size);
+            }
+            const mulTime = performance.now() - ts;
+            log(`${simd ? 'simd' : 'wasm'} for ${size}x${size} is ${mulTime} ms`);
+            const outMul = out.slice();
+            if (outMul.some(v => v !== size)) {
+                log('!!! Calculated incorrectly, please check "window.outMul"');
+            }
+
+            module._free_buf(outP);
+            module._free_buf(inA);
+            module._free_buf(inB);
+
+            return outMul;
+        }
+
+        function recalculate() {
+            window.outMul1 = doMultiplication(parseInt(document.getElementById('size').value), true);
+            window.outMul = doMultiplication(parseInt(document.getElementById('size').value));
+            window.outMulJs = doMultiplicationJs(parseInt(document.getElementById('size').value));
+        }
+
+        document.getElementById('calc').onclick = recalculate;
+
+        recalculate();
+    </script>
+</body>
+</html>
