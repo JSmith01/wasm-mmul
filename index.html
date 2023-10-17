@@ -10,10 +10,20 @@
             padding: 5px;
             border: 1px solid #000;
         }
+        #inworker ~ label[for=threads], #inworker ~ #threads, #inworker ~ label[for=simdworker], #inworker ~ #simdworker {
+            display: none;
+        }
+        #inworker:checked ~ label[for=threads], #inworker:checked ~ #threads,
+        #inworker:checked ~ label[for=simdworker], #inworker:checked ~ #simdworker{
+            display: initial;
+        }
     </style>
 </head>
 <body>
     <label for="size">Matrix size: </label><input id="size" value="512" type="number" min="2" max="4096">
+    <label for="inworker">In worker: </label><input type="checkbox" id="inworker">
+    <label for="threads">Threads count: </label><input type="number" id="threads" min="1" max="128" value="">
+    <label for="simdworker">SIMD: </label><input type="checkbox" id="simdworker" checked>
     <button id="calc">recalculate</button>
     <div id="outlog"></div>
     <script type="module">
@@ -21,6 +31,42 @@
         const module = await loadWasmMmul();
         log('WASM module is loaded');
         window.module = module;
+
+        const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+        document.getElementById('threads').max = '' + (navigator.hardwareConcurrency * 2);
+        document.getElementById('threads').value = '' + navigator.hardwareConcurrency;
+
+        const workers = Array.from({ length: navigator.hardwareConcurrency * 2 }, (_, i) => {
+            const w = new Worker('worker.js', { type: 'module' });
+            let resolve;
+            w.ready = new Promise(r => {
+                resolve = r;
+            });
+            let reqResolve = null;
+            w.req = data => {
+                if (reqResolve) return;
+                return new Promise(r => {
+                    reqResolve = r;
+                    w.postMessage(data);
+                })
+            }
+            w.onmessage = ({ data }) => {
+                if (data === 'ready') {
+                    resolve();
+                } else {
+                    //log(`From worker N${i + 1}: ${data}`);
+                    if (reqResolve) {
+                        reqResolve(data);
+                        reqResolve = null;
+                    }
+                }
+            }
+
+            return w;
+        });
+
+        await Promise.all(workers.map(w => w.ready));
 
         function log(text) {
             const logEl = document.getElementById('outlog');
@@ -86,15 +132,37 @@
             return outMul;
         }
 
+        async function calcInWorkers(size) {
+            const threads = parseInt(document.getElementById('threads').value);
+            const simd = document.getElementById('simdworker').checked;
+            const results = await Promise.all(
+                Array.from({ length: threads }, (_, i) => workers[i].req({ size, simd }))
+            );
+            const avg = results.reduce((a, v) => a + v) / threads;
+            const max = Math.max(...results);
+            const min = Math.min(...results);
+            log(`Size ${size}x ${size}, threads ${simd ? 'simd' : 'plain'} - ${threads}, avg: ${avg} ms, min: ${min} ms, max: ${max} max`);
+        }
+
+        async function calcInMain(size) {
+            window.outMul1 = doMultiplication(size, true);
+            await sleep(1);
+            window.outMul = doMultiplication(size);
+            await sleep(1);
+            window.outMulJs = doMultiplicationJs(size);
+        }
+
         function recalculate() {
-            window.outMul1 = doMultiplication(parseInt(document.getElementById('size').value), true);
-            window.outMul = doMultiplication(parseInt(document.getElementById('size').value));
-            window.outMulJs = doMultiplicationJs(parseInt(document.getElementById('size').value));
+            const size = parseInt(document.getElementById('size').value);
+
+            if (!document.getElementById('inworker').checked) {
+                calcInMain(size);
+            } else {
+                calcInWorkers(size);
+            }
         }
 
         document.getElementById('calc').onclick = recalculate;
-
-        recalculate();
     </script>
 </body>
 </html>
