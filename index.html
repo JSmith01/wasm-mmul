@@ -33,6 +33,7 @@
         window.module = module;
 
         const sleep = ms => new Promise(r => setTimeout(r, ms));
+        const round2 = v => Math.round(v * 100) / 100;
 
         document.getElementById('threads').max = '' + (navigator.hardwareConcurrency * 2);
         document.getElementById('threads').value = '' + navigator.hardwareConcurrency;
@@ -92,7 +93,7 @@
             const ts = performance.now();
             simpleMul(out, a, b, size);
             const mulTime = performance.now() - ts;
-            log(`JS for ${size}x${size} is ${mulTime} ms`);
+            log(`JS for ${size}x${size} is ${round2(mulTime)} ms`);
             if (out.some(v => v !== size)) {
                 log('!!! JS calculated incorrectly, please check "window.outMulJs"');
             }
@@ -119,7 +120,7 @@
                 module._mmul(outP, inA, inB, size);
             }
             const mulTime = performance.now() - ts;
-            log(`${simd ? 'simd' : 'wasm'} for ${size}x${size} is ${mulTime} ms`);
+            log(`${simd ? 'simd' : 'wasm'} for ${size}x${size} is ${round2(mulTime)} ms`);
             const outMul = out.slice();
             if (outMul.some(v => v !== size)) {
                 log('!!! Calculated incorrectly, please check "window.outMul"');
@@ -141,7 +142,7 @@
             const avg = results.reduce((a, v) => a + v) / threads;
             const max = Math.max(...results);
             const min = Math.min(...results);
-            log(`Size ${size}x ${size}, threads ${simd ? 'simd' : 'plain'} - ${threads}, avg: ${avg} ms, min: ${min} ms, max: ${max} max`);
+            log(`Size ${size}x ${size}, threads ${simd ? 'simd' : 'plain'} - ${threads}, avg: ${round2(avg)} ms, min: ${round2(min)} ms, max: ${round2(max)} ms`);
         }
 
         async function calcInMain(size) {
