@@ -19,151 +19,173 @@
         }
     </style>
 </head>
+
 <body>
+<div>
+    <label for="simd">SIMD</label><input type="checkbox" id="simd">
+</div>
+<div>
     <label for="size">Matrix size: </label><input id="size" value="512" type="number" min="2" max="4096">
     <label for="inworker">In worker: </label><input type="checkbox" id="inworker">
     <label for="threads">Threads count: </label><input type="number" id="threads" min="1" max="128" value="">
     <label for="simdworker">SIMD: </label><input type="checkbox" id="simdworker" checked>
     <button id="calc">recalculate</button>
-    <div id="outlog"></div>
-    <script type="module">
-        import loadWasmMmul from './mmul.mjs';
-        const module = await loadWasmMmul();
-        log('WASM module is loaded');
-        window.module = module;
+</div>
+<div id="outlog"></div>
+<script type="module">
+    const hasSimd = Boolean(JSON.parse(localStorage.getItem('simd') ?? 'false'));
+    if (!hasSimd) {
+        const simdworkerChk = document.getElementById('simdworker');
+        simdworkerChk.checked = false;
+        simdworkerChk.disabled = true;
+    }
 
-        const sleep = ms => new Promise(r => setTimeout(r, ms));
-        const round2 = v => Math.round(v * 100) / 100;
+    const simdChk = document.getElementById('simd');
+    simdChk.checked = hasSimd;
+    simdChk.onchange = () => {
+        localStorage.simd = JSON.stringify(simdChk.checked);
+        location.reload();
+    }
 
-        document.getElementById('threads').max = '' + (navigator.hardwareConcurrency * 2);
-        document.getElementById('threads').value = '' + navigator.hardwareConcurrency;
+    const loadWasmMmul = (await import(hasSimd ? './mmul.mjs' : './mmul-plain.mjs')).default;
+    const module = await loadWasmMmul();
+    log('WASM module is loaded');
+    window.module = module;
 
-        const workers = Array.from({ length: navigator.hardwareConcurrency * 2 }, (_, i) => {
-            const w = new Worker('worker.js', { type: 'module' });
-            let resolve;
-            w.ready = new Promise(r => {
-                resolve = r;
-            });
-            let reqResolve = null;
-            w.req = data => {
-                if (reqResolve) return;
-                return new Promise(r => {
-                    reqResolve = r;
-                    w.postMessage(data);
-                })
-            }
-            w.onmessage = ({ data }) => {
-                if (data === 'ready') {
-                    resolve();
-                } else {
-                    //log(`From worker N${i + 1}: ${data}`);
-                    if (reqResolve) {
-                        reqResolve(data);
-                        reqResolve = null;
-                    }
-                }
-            }
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const round2 = v => Math.round(v * 100) / 100;
 
-            return w;
+    document.getElementById('threads').max = '' + (navigator.hardwareConcurrency * 2);
+    document.getElementById('threads').value = '' + navigator.hardwareConcurrency;
+
+    const workers = Array.from({ length: navigator.hardwareConcurrency * 2 }, (_, i) => {
+        const w = new Worker(hasSimd ? 'worker.js' : 'worker-plain.js', { type: 'module' });
+        let resolve;
+        w.ready = new Promise(r => {
+            resolve = r;
         });
-
-        await Promise.all(workers.map(w => w.ready));
-
-        function log(text) {
-            const logEl = document.getElementById('outlog');
-            logEl.innerText = logEl.innerText + text + '\n';
+        let reqResolve = null;
+        w.req = data => {
+            if (reqResolve) return;
+            return new Promise(r => {
+                reqResolve = r;
+                w.postMessage(data);
+            })
         }
-
-        function simpleMul(out, a, b, n) {
-            for (let i = 0; i < n; i++) {
-                for (let j = 0; j < n; j++) {
-                    out[i * n + j] = 0;
-                    for (let k = 0; k < n; k++) {
-                        out[i * n + j] += a[i * n + k] * b[j * n + k];
-                    }
+        w.onmessage = ({ data }) => {
+            if (data === 'ready') {
+                resolve();
+            } else {
+                //log(`From worker N${i + 1}: ${data}`);
+                if (reqResolve) {
+                    reqResolve(data);
+                    reqResolve = null;
                 }
             }
         }
 
-        function doMultiplicationJs(size) {
-            const a = new Int32Array(size * size);
-            a.fill(1);
-            const b = a.slice();
-            const out = new Int32Array(size * size);
-            const ts = performance.now();
-            simpleMul(out, a, b, size);
-            const mulTime = performance.now() - ts;
-            log(`JS for ${size}x${size} is ${round2(mulTime)} ms`);
-            if (out.some(v => v !== size)) {
-                log('!!! JS calculated incorrectly, please check "window.outMulJs"');
-            }
+        return w;
+    });
 
-            return outMul;
+    await Promise.all(workers.map(w => w.ready));
+
+    function log(text) {
+        const logEl = document.getElementById('outlog');
+        logEl.innerText = logEl.innerText + text + '\n';
+    }
+
+    function simpleMul(out, a, b, n) {
+        for (let i = 0; i < n; i++) {
+            for (let j = 0; j < n; j++) {
+                out[i * n + j] = 0;
+                for (let k = 0; k < n; k++) {
+                    out[i * n + j] += a[i * n + k] * b[j * n + k];
+                }
+            }
+        }
+    }
+
+    function doMultiplicationJs(size) {
+        const a = new Int32Array(size * size);
+        a.fill(1);
+        const b = a.slice();
+        const out = new Int32Array(size * size);
+        const ts = performance.now();
+        simpleMul(out, a, b, size);
+        const mulTime = performance.now() - ts;
+        log(`JS for ${size}x${size} is ${round2(mulTime)} ms`);
+        if (out.some(v => v !== size)) {
+            log('!!! JS calculated incorrectly, please check "window.outMulJs"');
         }
 
-        function doMultiplication(size, simd) {
-            const arraySize = size * size;
-            const outP = module._alloc_buf(size);
-            const out = new Int32Array(module.HEAPU8.buffer, outP, arraySize);
-            const inA = module._alloc_buf(size);
-            const a = new Int32Array(module.HEAPU8.buffer, inA, arraySize);
-            const inB = module._alloc_buf(size);
-            const b = new Int32Array(module.HEAPU8.buffer, inB, arraySize);
+        return out;
+    }
 
-            a.fill(1);
-            b.fill(1);
+    function doMultiplication(size, simd) {
+        const arraySize = size * size;
+        const outP = module._alloc_buf(size);
+        const out = new Int32Array(module.HEAPU8.buffer, outP, arraySize);
+        const inA = module._alloc_buf(size);
+        const a = new Int32Array(module.HEAPU8.buffer, inA, arraySize);
+        const inB = module._alloc_buf(size);
+        const b = new Int32Array(module.HEAPU8.buffer, inB, arraySize);
 
-            const ts = performance.now();
-            if (simd) {
-                module._mmul_simd(outP, inA, inB, size);
-            } else {
-                module._mmul(outP, inA, inB, size);
-            }
-            const mulTime = performance.now() - ts;
-            log(`${simd ? 'simd' : 'wasm'} for ${size}x${size} is ${round2(mulTime)} ms`);
-            const outMul = out.slice();
-            if (outMul.some(v => v !== size)) {
-                log('!!! Calculated incorrectly, please check "window.outMul"');
-            }
+        a.fill(1);
+        b.fill(1);
 
-            module._free_buf(outP);
-            module._free_buf(inA);
-            module._free_buf(inB);
-
-            return outMul;
+        const ts = performance.now();
+        if (simd) {
+            module._mmul_simd(outP, inA, inB, size);
+        } else {
+            module._mmul(outP, inA, inB, size);
+        }
+        const mulTime = performance.now() - ts;
+        log(`${simd ? 'simd' : 'wasm'} for ${size}x${size} is ${round2(mulTime)} ms`);
+        const outMul = out.slice();
+        if (outMul.some(v => v !== size)) {
+            log('!!! Calculated incorrectly, please check "window.outMul"');
         }
 
-        async function calcInWorkers(size) {
-            const threads = parseInt(document.getElementById('threads').value);
-            const simd = document.getElementById('simdworker').checked;
-            const results = await Promise.all(
-                Array.from({ length: threads }, (_, i) => workers[i].req({ size, simd }))
-            );
-            const avg = results.reduce((a, v) => a + v) / threads;
-            const max = Math.max(...results);
-            const min = Math.min(...results);
-            log(`Size ${size}x ${size}, threads ${simd ? 'simd' : 'plain'} - ${threads}, avg: ${round2(avg)} ms, min: ${round2(min)} ms, max: ${round2(max)} ms`);
-        }
+        module._free_buf(outP);
+        module._free_buf(inA);
+        module._free_buf(inB);
 
-        async function calcInMain(size) {
-            window.outMul1 = doMultiplication(size, true);
+        return outMul;
+    }
+
+    async function calcInWorkers(size) {
+        const threads = parseInt(document.getElementById('threads').value);
+        const simd = document.getElementById('simdworker').checked;
+        const results = await Promise.all(
+            Array.from({ length: threads }, (_, i) => workers[i].req({ size, simd }))
+        );
+        const avg = results.reduce((a, v) => a + v) / threads;
+        const max = Math.max(...results);
+        const min = Math.min(...results);
+        log(`Size ${size}x ${size}, threads ${simd ? 'simd' : 'plain'} - ${threads}, avg: ${round2(avg)} ms, min: ${round2(min)} ms, max: ${round2(max)} ms`);
+    }
+
+    async function calcInMain(size) {
+        if (hasSimd) {
+            window.outMulSimd = doMultiplication(size, true);
             await sleep(1);
-            window.outMul = doMultiplication(size);
-            await sleep(1);
-            window.outMulJs = doMultiplicationJs(size);
         }
+        window.outMul = doMultiplication(size);
+        await sleep(1);
+        window.outMulJs = doMultiplicationJs(size);
+    }
 
-        function recalculate() {
-            const size = parseInt(document.getElementById('size').value);
+    function recalculate() {
+        const size = parseInt(document.getElementById('size').value);
 
-            if (!document.getElementById('inworker').checked) {
-                calcInMain(size);
-            } else {
-                calcInWorkers(size);
-            }
+        if (!document.getElementById('inworker').checked) {
+            calcInMain(size);
+        } else {
+            calcInWorkers(size);
         }
+    }
 
-        document.getElementById('calc').onclick = recalculate;
-    </script>
+    document.getElementById('calc').onclick = recalculate;
+</script>
 </body>
 </html>
